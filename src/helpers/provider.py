@@ -3,7 +3,6 @@ import pandas as pd
 from src.helpers.argparser import Parser
 
 
-def file_reader():
-    args = Parser().parse()
-    df = pd.read_csv(args.path)
+def file_reader(path):
+    df = pd.read_csv(path)
     return df

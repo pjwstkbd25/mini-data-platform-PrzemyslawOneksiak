@@ -1,0 +1,14 @@
+version: "3.8"
+
+services:
+  postgres:
+    image: postgres:14
+    container_name: postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: /run/secrets/postgres_password
+      POSTGRES_DB: bigdata
+    secrets:
+      - postgres_password
+    ports:
+        - "5432:5432"
