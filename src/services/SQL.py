@@ -12,5 +12,8 @@ class SQL:
         data.to_sql(table_name, con=self.engine, if_exists="replace")
 
     def select_data(self, table_name, columns: list):
-        pd.read_sql_query(f"SELECT {columns} FROM {table_name}", con=self.engine)
+        try:
+            pd.read_sql_query(f"SELECT {columns} FROM {table_name}", con=self.engine)
+        except Exception as e:
+            print(e)
 
