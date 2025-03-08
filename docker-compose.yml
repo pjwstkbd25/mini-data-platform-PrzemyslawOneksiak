@@ -12,3 +12,8 @@ services:
       - postgres_password
     ports:
         - "5432:5432"
+
+
+secrets:
+  postgres_password:
+    file: ./secrets/postgres_password.txt
