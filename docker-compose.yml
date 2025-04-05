@@ -34,12 +34,24 @@ services:
     ports:
       - "9092:9092"
 
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.3.1
+    container_name: schema_registry_big_data
+    depends_on:
+      - kafka
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: PLAINTEXT://kafka:9092
+    ports:
+      - "8081:8081"
+
   connect:
     image: debezium/connect:2.2
     container_name: debezium_connect_big_data
     depends_on:
       - kafka
       - postgres
+      - schema-registry
     ports:
       - "8083:8083"
     environment:
@@ -48,11 +60,12 @@ services:
       CONFIG_STORAGE_TOPIC: my_connect_configs
       OFFSET_STORAGE_TOPIC: my_connect_offsets
       STATUS_STORAGE_TOPIC: my_connect_statuses
-      KEY_CONVERTER_SCHEMAS_ENABLE: "false"
-      VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
-      INTERNAL_KEY_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
-      INTERNAL_VALUE_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
-      REST_ADVERTISED_HOST_NAME: connect
+      KEY_CONVERTER: io.confluent.connect.avro.AvroConverter
+      VALUE_CONVERTER: io.confluent.connect.avro.AvroConverter
+      CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      CONNECT_PLUGIN_PATH: /kafka/connect-plugins
+
 
 secrets:
   postgres_password:
