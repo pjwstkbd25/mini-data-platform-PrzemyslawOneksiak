@@ -1,18 +1,58 @@
-version: "3.8"
-
 services:
   postgres:
     image: postgres:14
-    container_name: postgres
+    container_name: postgres_big_data
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: /run/secrets/postgres_password
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       POSTGRES_DB: bigdata
     secrets:
       - postgres_password
     ports:
-        - "5432:5432"
+        - "5433:5432"
 
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.3.1
+    container_name: zookeeper_big_data
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+
+  kafka:
+    image: confluentinc/cp-kafka:7.3.1
+    container_name: kafka_big_data
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    ports:
+      - "9092:9092"
+
+  connect:
+    image: debezium/connect:2.2
+    container_name: debezium_connect_big_data
+    depends_on:
+      - kafka
+      - postgres
+    ports:
+      - "8083:8083"
+    environment:
+      BOOTSTRAP_SERVERS: kafka:9092
+      GROUP_ID: "1"
+      CONFIG_STORAGE_TOPIC: my_connect_configs
+      OFFSET_STORAGE_TOPIC: my_connect_offsets
+      STATUS_STORAGE_TOPIC: my_connect_statuses
+      KEY_CONVERTER_SCHEMAS_ENABLE: "false"
+      VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
+      INTERNAL_KEY_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      INTERNAL_VALUE_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      REST_ADVERTISED_HOST_NAME: connect
 
 secrets:
   postgres_password:

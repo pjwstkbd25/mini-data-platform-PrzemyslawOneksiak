@@ -4,9 +4,8 @@ import pandas as pd
 
 class SQL:
 
-    def __init__(self, path):
-        self.engine = create_engine(path)
-
+    def __init__(self, user: str, password: str, host, db_name: str, port: str):
+        self.engine = create_engine(f"postgresql://{user}:{password}@{host}:{port}/{db_name}")
 
     def load_data(self, data: DataFrame, table_name: str):
         data.to_sql(table_name, con=self.engine, if_exists="replace")
