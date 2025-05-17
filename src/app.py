@@ -1,10 +1,11 @@
 from src.helpers.argparser import Parser
-from src.helpers.provider import file_reader
+from src.helpers.utils import file_reader
 from src.services.SQL import SQL
+import os
 
 def main():
     args = Parser().parse()
-    df = file_reader(args.csv_path)
+    csv_dir = args.csv_dir
     sql = SQL(
         user="postgres",
         password = args.password,
@@ -12,7 +13,13 @@ def main():
         db_name="bigdata",
         port="5433"
     )
-    sql.load_data(df, args.table_name)
+    for fname in os.listdir(csv_dir):
+        if not fname.lower().endswith(".csv"):
+            continue
+        table = os.path.splitext(fname)[0]
+        full_path = os.path.join(csv_dir, fname)
+        df = file_reader(full_path)
+        sql.load_data(df, table)
 
 
 

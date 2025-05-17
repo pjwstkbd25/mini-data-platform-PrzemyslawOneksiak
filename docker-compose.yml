@@ -1,4 +1,7 @@
+version: '3.8'
+
 services:
+
   postgres:
     image: postgres:14
     container_name: postgres_big_data
@@ -6,10 +9,14 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       POSTGRES_DB: bigdata
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres-conf:/etc/postgresql/conf.d
     secrets:
       - postgres_password
-    ports:
-        - "5433:5432"
 
   zookeeper:
     image: confluentinc/cp-zookeeper:7.3.1
@@ -31,6 +38,8 @@ services:
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
     ports:
       - "9092:9092"
 
@@ -66,7 +75,76 @@ services:
       CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
       CONNECT_PLUGIN_PATH: /kafka/connect-plugins
 
+  simulator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: business_simulator
+    depends_on:
+      - postgres
+    environment:
+      CSV_DIR: /app/data
+      PASSWORD: /run/secrets/postgres_password
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+    command: ["python", "app.py", "--csv_dir", "/app/data", "--password", "/run/secrets/postgres_password"]
+    secrets:
+      - postgres_password
+    volumes:
+      - ./data:/app/data
+      - ./src:/app
+
+  kafka-consumer:
+    build:
+      context: ./kafka-consumer
+      dockerfile: Dockerfile
+    container_name: kafka_consumer
+    depends_on:
+      - kafka
+    environment:
+      BOOTSTRAP_SERVERS: kafka:9092
+      GROUP_ID: debezium-consumer-group
+      TOPIC: test
+
+  spark:
+    image: bitnami/spark:3.3.2
+    container_name: spark_big_data
+    depends_on:
+      - kafka
+      - schema-registry
+    environment:
+      SPARK_MODE: "master"
+      SPARK_MASTER_HOST: spark
+    volumes:
+      - ./spark-jobs:/opt/spark-apps
+    command: >
+      /opt/bitnami/scripts/spark/entrypoint.sh spark-submit
+      --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.3.2,
+                 io.delta:delta-core_2.12:2.1.0,
+                 com.databricks:spark-avro_2.12:3.3.2
+      /opt/spark-apps/streaming_job.py
+
+  minio:
+    image: minio/minio:RELEASE.2024-03-15T00-00-04Z
+    container_name: minio_big_data
+    command: server /data
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - miniodata:/data
+
+volumes:
+  pgdata:
+  miniodata:
 
 secrets:
   postgres_password:
     file: ./secrets/postgres_password.txt
+
+networks:
+  default:
+    name: big_data_network
