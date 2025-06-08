@@ -6,7 +6,7 @@ class Parser:
     def __init__(self):
         self.parser = argparse.ArgumentParser()
         self.parser.add_argument("--csv_dir", type=str, required=True, help="Ścieżka do katalogu z CSV")
-        self.parser.add_argument("--password", type=str, required=True, help="Hasło do postgreSQL")
+        # self.parser.add_argument("--password", type=str, required=True, help="Hasło do postgreSQL")
 
     def parse(self):
         try:

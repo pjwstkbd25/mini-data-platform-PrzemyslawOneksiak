@@ -1,5 +1,5 @@
 from helpers.argparser import Parser
-from helpers.utils import file_reader
+from helpers.utils import file_reader, load_secret_password
 from services.SQL import SQL
 import os
 
@@ -8,11 +8,13 @@ def main():
     csv_dir = args.csv_dir
     sql = SQL(
         user="postgres",
-        password = args.password,
-        host="localhost",
+        password = load_secret_password("/run/secrets/postgres_password"),
+        # password=args.password,
+        host="postgres",
         db_name="bigdata",
-        port="5433"
+        port="5432"
     )
+    print("DEBUG: engine utworzony, próbuję load_data…")
     for fname in os.listdir(csv_dir):
         if not fname.lower().endswith(".csv"):
             continue
