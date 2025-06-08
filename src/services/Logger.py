@@ -27,6 +27,3 @@ class Logger:
 
     def log_debug(self, additional_message):
         self.logger.debug(additional_message)
-
-
-

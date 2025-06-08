@@ -1,6 +1,6 @@
-from src.helpers.argparser import Parser
-from src.helpers.utils import file_reader
-from src.services.SQL import SQL
+from helpers.argparser import Parser
+from helpers.utils import file_reader
+from services.SQL import SQL
 import os
 
 def main():

@@ -17,6 +17,12 @@ services:
       - ./postgres-conf:/etc/postgresql/conf.d
     secrets:
       - postgres_password
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER}" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
   zookeeper:
     image: confluentinc/cp-zookeeper:7.3.1
@@ -26,6 +32,12 @@ services:
       ZOOKEEPER_TICK_TIME: 2000
     ports:
       - "2181:2181"
+    healthcheck:
+      test: [ "CMD-SHELL", "echo stat | nc localhost 2181 | grep Mode" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
   kafka:
     image: confluentinc/cp-kafka:7.3.1
@@ -42,6 +54,12 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
     ports:
       - "9092:9092"
+    healthcheck:
+      test: [ "CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9092 > /dev/null 2>&1" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
   schema-registry:
     image: confluentinc/cp-schema-registry:7.3.1
@@ -53,10 +71,16 @@ services:
       SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: PLAINTEXT://kafka:9092
     ports:
       - "8081:8081"
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -f http://localhost:8081/subjects || exit 1" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
   connect:
-    image: debezium/connect:2.2
-    container_name: debezium_connect_big_data
+    image: confluentinc/cp-kafka-connect:7.3.1
+    container_name: confluent_connect_big_data
     depends_on:
       - kafka
       - postgres
@@ -64,16 +88,23 @@ services:
     ports:
       - "8083:8083"
     environment:
-      BOOTSTRAP_SERVERS: kafka:9092
-      GROUP_ID: "1"
-      CONFIG_STORAGE_TOPIC: my_connect_configs
-      OFFSET_STORAGE_TOPIC: my_connect_offsets
-      STATUS_STORAGE_TOPIC: my_connect_statuses
-      KEY_CONVERTER: io.confluent.connect.avro.AvroConverter
-      VALUE_CONVERTER: io.confluent.connect.avro.AvroConverter
+      CONNECT_BOOTSTRAP_SERVERS: kafka:9092
+      CONNECT_REST_PORT: 8083
+      CONNECT_GROUP_ID: "1"
+      CONNECT_CONFIG_STORAGE_TOPIC: my_connect_configs
+      CONNECT_OFFSET_STORAGE_TOPIC: my_connect_offsets
+      CONNECT_STATUS_STORAGE_TOPIC: my_connect_statuses
+      CONNECT_KEY_CONVERTER: io.confluent.connect.avro.AvroConverter
+      CONNECT_VALUE_CONVERTER: io.confluent.connect.avro.AvroConverter
       CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
       CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
-      CONNECT_PLUGIN_PATH: /kafka/connect-plugins
+#      CONNECT_PLUGIN_PATH: /kafka/connect-plugins
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -f http://localhost:8083/connectors || exit 1" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
   simulator:
     build:
@@ -93,10 +124,16 @@ services:
     volumes:
       - ./data:/app/data
       - ./src:/app
+    healthcheck:
+      test: [ "CMD-SHELL", "python - << 'EOF'\nimport psycopg2, os; \nconn = psycopg2.connect(host=os.getenv('POSTGRES_HOST'), port=os.getenv('POSTGRES_PORT'), user='postgres', password=open(os.getenv('PASSWORD')).read().strip(), dbname='bigdata');\nconn.close();\nEOF" ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
   kafka-consumer:
     build:
-      context: ./kafka-consumer
+      context: ./src/kafka-consumer
       dockerfile: Dockerfile
     container_name: kafka_consumer
     depends_on:
@@ -105,6 +142,12 @@ services:
       BOOTSTRAP_SERVERS: kafka:9092
       GROUP_ID: debezium-consumer-group
       TOPIC: test
+    healthcheck:
+      test: [ "CMD-SHELL", "python - << 'EOF'\nfrom confluent_kafka import Consumer; c = Consumer({'bootstrap.servers': os.getenv('BOOTSTRAP_SERVERS'), 'group.id': os.getenv('GROUP_ID'), 'auto.offset.reset': 'earliest'}); c.subscribe([os.getenv('TOPIC')]); c.close();\nEOF" ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
   spark:
     image: bitnami/spark:3.3.2
@@ -119,13 +162,17 @@ services:
       - ./spark-jobs:/opt/spark-apps
     command: >
       /opt/bitnami/scripts/spark/entrypoint.sh spark-submit
-      --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.3.2,
-                 io.delta:delta-core_2.12:2.1.0,
-                 com.databricks:spark-avro_2.12:3.3.2
+      --packages "org.apache.spark:spark-sql-kafka-0-10_2.12:3.3.2,io.delta:delta-core_2.12:2.1.0,org.apache.spark:spark-avro_2.12:3.3.2"
       /opt/spark-apps/streaming_job.py
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -f http://localhost:8080 || exit 1" ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
   minio:
-    image: minio/minio:RELEASE.2024-03-15T00-00-04Z
+    image: minio/minio:latest
     container_name: minio_big_data
     command: server /data
     environment:
@@ -136,6 +183,12 @@ services:
       - "9001:9001"
     volumes:
       - miniodata:/data
+    healthcheck:
+      test: [ "CMD-SHELL", "mc alias set _local_ http://localhost:9000 minioadmin minioadmin && mc ls _local_/ || exit 1" ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
 volumes:
   pgdata:
