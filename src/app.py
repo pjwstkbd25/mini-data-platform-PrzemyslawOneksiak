@@ -15,12 +15,14 @@ def main():
         port="5432"
     )
     print("DEBUG: engine utworzony, próbuję load_data…")
+    print(os.listdir(csv_dir))
     for fname in os.listdir(csv_dir):
         if not fname.lower().endswith(".csv"):
             continue
         table = os.path.splitext(fname)[0]
         full_path = os.path.join(csv_dir, fname)
         df = file_reader(full_path)
+        print(df)
         sql.load_data(df, table)
 
 

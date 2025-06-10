@@ -1,10 +1,10 @@
-version: '3.8'
-
 services:
 
   postgres:
     image: postgres:14
     container_name: postgres_big_data
+    networks:
+      - big_data_network
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
@@ -15,17 +15,20 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./postgres-conf:/etc/postgresql/conf.d
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
     secrets:
       - postgres_password
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER}" ]
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 30s
 
   zookeeper:
-    image: confluentinc/cp-zookeeper:7.3.1
+    image: confluentinc/cp-zookeeper:7.6.0
+    networks:
+      - big_data_network
     container_name: zookeeper_big_data
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
@@ -40,20 +43,26 @@ services:
       start_period: 30s
 
   kafka:
-    image: confluentinc/cp-kafka:7.3.1
+    image: confluentinc/cp-kafka:7.6.0
     container_name: kafka_big_data
+    networks:
+      - big_data_network
     depends_on:
       - zookeeper
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,PLAINTEXT_INTERNAL://0.0.0.0:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,PLAINTEXT_INTERNAL://kafka:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
     ports:
       - "9092:9092"
+      - "29092:29092"
     healthcheck:
       test: [ "CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9092 > /dev/null 2>&1" ]
       interval: 10s
@@ -62,13 +71,15 @@ services:
       start_period: 30s
 
   schema-registry:
-    image: confluentinc/cp-schema-registry:7.3.1
+    image: confluentinc/cp-schema-registry:7.6.0
+    networks:
+      - big_data_network
     container_name: schema_registry_big_data
     depends_on:
       - kafka
     environment:
       SCHEMA_REGISTRY_HOST_NAME: schema-registry
-      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: PLAINTEXT://kafka:9092
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: PLAINTEXT://kafka:29092
     ports:
       - "8081:8081"
     healthcheck:
@@ -79,16 +90,22 @@ services:
       start_period: 30s
 
   connect:
-    image: confluentinc/cp-kafka-connect:7.3.1
-    container_name: confluent_connect_big_data
+    build:
+      context: ./connect-docker
+    container_name: connect_debezium
+    networks:
+      - big_data_network
     depends_on:
-      - kafka
-      - postgres
-      - schema-registry
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      schema-registry:
+        condition: service_healthy
     ports:
       - "8083:8083"
     environment:
-      CONNECT_BOOTSTRAP_SERVERS: kafka:9092
+      CONNECT_BOOTSTRAP_SERVERS: kafka:29092
       CONNECT_REST_PORT: 8083
       CONNECT_GROUP_ID: "1"
       CONNECT_CONFIG_STORAGE_TOPIC: my_connect_configs
@@ -103,9 +120,10 @@ services:
       CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
       CONNECT_REST_ADVERTISED_HOST_NAME: connect
       CONNECT_REST_ADVERTISED_PORT: 8083
-#      CONNECT_PLUGIN_PATH: /kafka/connect-plugins
+    volumes:
+      - ./secrets:/run/secrets:ro
     healthcheck:
-      test: [ "CMD-SHELL", "curl -f http://localhost:8083/connectors || exit 1" ]
+      test: ["CMD-SHELL", "curl -f http://localhost:8083/connectors || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -116,6 +134,8 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: business_simulator
+    networks:
+      - big_data_network
     depends_on:
       - postgres
     environment:
@@ -123,11 +143,11 @@ services:
       PASSWORD: /run/secrets/postgres_password
       POSTGRES_HOST: postgres
       POSTGRES_PORT: "5432"
-    command: ["python", "app.py", "--csv_dir", "/app/data", "--password", "/run/secrets/postgres_password"]
+    command: ["python", "app.py", "--csv_dir", "/app/data"]
     secrets:
       - postgres_password
     volumes:
-      - ./data:/app/data
+      - ./src/data:/app/data
       - ./src:/app
     healthcheck:
       test: [ "CMD-SHELL", "python - << 'EOF'\nimport psycopg2, os; \nconn = psycopg2.connect(host=os.getenv('POSTGRES_HOST'), port=os.getenv('POSTGRES_PORT'), user='postgres', password=open(os.getenv('PASSWORD')).read().strip(), dbname='bigdata');\nconn.close();\nEOF" ]
@@ -141,12 +161,15 @@ services:
       context: ./src/kafka-consumer
       dockerfile: Dockerfile
     container_name: kafka_consumer
+    networks:
+      - big_data_network
     depends_on:
-      - kafka
+      kafka:
+        condition: service_healthy
     environment:
       BOOTSTRAP_SERVERS: kafka:9092
       GROUP_ID: debezium-consumer-group
-      TOPIC: test
+      TOPIC: bigdata.public.table1
     healthcheck:
       test: [ "CMD-SHELL", "python - << 'EOF'\nfrom confluent_kafka import Consumer; c = Consumer({'bootstrap.servers': os.getenv('BOOTSTRAP_SERVERS'), 'group.id': os.getenv('GROUP_ID'), 'auto.offset.reset': 'earliest'}); c.subscribe([os.getenv('TOPIC')]); c.close();\nEOF" ]
       interval: 15s
@@ -156,18 +179,31 @@ services:
 
   spark:
     image: bitnami/spark:3.3.2
+    build:
+      context: ./spark-jobs
+      dockerfile: Dockerfile
     container_name: spark_big_data
+    networks:
+      - big_data_network
     depends_on:
       - kafka
       - schema-registry
     environment:
       SPARK_MODE: "master"
       SPARK_MASTER_HOST: spark
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadmin
+      S3_ENDPOINT: http://minio:9000
     volumes:
       - ./spark-jobs:/opt/spark-apps
     command: >
       /opt/bitnami/scripts/spark/entrypoint.sh spark-submit
-      --packages "org.apache.spark:spark-sql-kafka-0-10_2.12:3.3.2,io.delta:delta-core_2.12:2.1.0,org.apache.spark:spark-avro_2.12:3.3.2"
+      --packages "org.apache.spark:spark-sql-kafka-0-10_2.12:3.3.2,io.delta:delta-core_2.12:2.1.0,org.apache.spark:spark-avro_2.12:3.3.2,org.apache.hadoop:hadoop-aws:3.3.4"
+      --conf spark.hadoop.fs.s3a.endpoint=${S3_ENDPOINT}
+      --conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem
+      --conf spark.hadoop.fs.s3a.path.style.access=true
+      --conf spark.hadoop.fs.s3a.access.key=${AWS_ACCESS_KEY_ID}
+      --conf spark.hadoop.fs.s3a.secret.key=${AWS_SECRET_ACCESS_KEY}
       /opt/spark-apps/streaming_job.py
     healthcheck:
       test: [ "CMD-SHELL", "curl -f http://localhost:8080 || exit 1" ]
@@ -179,6 +215,8 @@ services:
   minio:
     image: minio/minio:latest
     container_name: minio_big_data
+    networks:
+      - big_data_network
     command: server /data
     environment:
       MINIO_ROOT_USER: minioadmin
@@ -204,5 +242,5 @@ secrets:
     file: ./secrets/postgres_password.txt
 
 networks:
-  default:
+  big_data_network:
     name: big_data_network
