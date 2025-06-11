@@ -9,10 +9,10 @@ schema_registry_url = "http://schema-registry:8081"
 tables = ["table1", "table2", "table3"]
 
 # Subscribe pattern na wszystkie trzy tabele
-topic_pattern = "bigdata\\.public\\.(table1|table2|table3)"
+topic_pattern = "test\\.public\\.(table1|table2|table3)"
 
 # Pobieramy schemat dla pierwszej tabeli (zakładamy, że wszystkie mają tę samą strukturę)
-subject = f"bigdata.public.{tables[0]}-value"
+subject = f"test.public.{tables[0]}-value"
 url = f"{schema_registry_url}/subjects/{subject}/versions/latest"
 
 # Czekanie na pojawienie się schematu

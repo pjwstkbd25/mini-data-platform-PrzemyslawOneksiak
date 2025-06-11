@@ -14,7 +14,7 @@ services:
       - "5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./postgres-conf:/etc/postgresql/conf.d
+      - ./postgres-conf/postgresql.conf:/var/lib/postgresql/data/postgresql.conf
 #      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
     secrets:
       - postgres_password
@@ -24,6 +24,8 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
+    profiles:
+      - postgres
 
   zookeeper:
     image: confluentinc/cp-zookeeper:7.6.0
@@ -41,6 +43,8 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
+    profiles:
+      - kafka
 
   kafka:
     image: confluentinc/cp-kafka:7.6.0
@@ -53,7 +57,7 @@ services:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
       KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,PLAINTEXT_INTERNAL://0.0.0.0:29092
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,PLAINTEXT_INTERNAL://kafka:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_INTERNAL://kafka:29092
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
@@ -69,6 +73,8 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
+    profiles:
+      - kafka
 
   schema-registry:
     image: confluentinc/cp-schema-registry:7.6.0
@@ -89,47 +95,54 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
+    profiles:
+      - kafka
 
   connect:
-    build:
-      context: ./connect-docker
-    container_name: connect_debezium
-    networks:
-      - big_data_network
-    depends_on:
-      kafka:
-        condition: service_healthy
-      postgres:
-        condition: service_healthy
-      schema-registry:
-        condition: service_healthy
+    image: confluentinc/cp-kafka-connect:7.6.0
     ports:
       - "8083:8083"
+    networks:
+      - big_data_network
     environment:
-      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
-      CONNECT_BOOTSTRAP_SERVERS: kafka:29092
-      CONNECT_REST_PORT: 8083
-      CONNECT_GROUP_ID: "1"
-      CONNECT_CONFIG_STORAGE_TOPIC: my_connect_configs
-      CONNECT_OFFSET_STORAGE_TOPIC: my_connect_offsets
-      CONNECT_STATUS_STORAGE_TOPIC: my_connect_statuses
+      CONNECT_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      CONNECT_GROUP_ID: connect-cluster
+      CONNECT_CONFIG_STORAGE_TOPIC: connect-configs
+      CONNECT_OFFSET_STORAGE_TOPIC: connect-offsets
+      CONNECT_STATUS_STORAGE_TOPIC: connect-status
       CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: 1
       CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_REST_ADVERTISED_HOST_NAME: connect
       CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: 1
       CONNECT_KEY_CONVERTER: io.confluent.connect.avro.AvroConverter
       CONNECT_VALUE_CONVERTER: io.confluent.connect.avro.AvroConverter
       CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
       CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
-      CONNECT_REST_ADVERTISED_HOST_NAME: connect
-      CONNECT_REST_ADVERTISED_PORT: 8083
+#      CONNECT_PLUGIN_PATH: /usr/share/java,/usr/share/confluent-hub-components
     volumes:
-      - ./secrets:/run/secrets:ro
+      - ./connectors:/etc/kafka-connect/connectors
+#    entrypoint: "tail -f /dev/null"
+#            mv /usr/share/confluent-hub-components/debezium-debezium-connector-postgresql /usr/share/java &&
+    command: >
+      bash -c "
+        confluent-hub install --no-prompt debezium/debezium-connector-postgresql:2.5.4 &&
+
+      (
+          echo 'Waiting for Kafka Connect REST API to become available...';
+          until curl -s localhost:8083/connectors; do sleep 3; done;
+          echo 'Registering connector...';
+          curl -s -X POST http://localhost:8083/connectors -H 'Content-Type: application/json' -d @/etc/kafka-connect/connectors/postgres-connector.json || true
+      ) &
+      /etc/confluent/docker/run 
+      "
+    profiles:
+      - kafka
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8083/connectors || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
+      test:
+        bash -c "
+          curl -s localhost:8083/connectors | grep -q '\[\s*\]' && exit 1 || exit 0
+        "
 
   simulator:
     build:
@@ -158,6 +171,8 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
+    profiles:
+      - postgres
 
   kafka-consumer:
     build:
@@ -171,16 +186,20 @@ services:
         condition: service_healthy
       connect:
         condition: service_healthy
+    entrypoint:
+      "tail -f /dev/null"
     environment:
       BOOTSTRAP_SERVERS: kafka:9092
       GROUP_ID: debezium-consumer-group
 #      TOPIC: bigdata.public.table1
     healthcheck:
-      test: [ "CMD-SHELL", "python - << 'EOF'\nfrom confluent_kafka import Consumer; c = Consumer({'bootstrap.servers': os.getenv('BOOTSTRAP_SERVERS'), 'group.id': os.getenv('GROUP_ID'), 'auto.offset.reset': 'earliest'}); c.subscribe([os.getenv('TOPIC')]); c.close();\nEOF" ]
+      test: [ "CMD-SHELL", "python - << 'EOF'\nfrom confluent_kafka import Consumer; import os; c = Consumer({'bootstrap.servers': os.getenv('BOOTSTRAP_SERVERS'), 'group.id': os.getenv('GROUP_ID'), 'auto.offset.reset': 'earliest'}); c.subscribe([os.getenv('TOPIC')]); c.close();\nEOF" ]
       interval: 15s
       timeout: 5s
       retries: 5
       start_period: 30s
+    profiles:
+      - kafka
 
   spark:
     image: bitnami/spark:3.3.2
@@ -216,6 +235,8 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
+    profiles:
+      - spark
 
   minio:
     image: minio/minio:latest
@@ -237,6 +258,8 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
+    profiles:
+      - spark
 
 volumes:
   pgdata:
@@ -249,3 +272,4 @@ secrets:
 networks:
   big_data_network:
     name: big_data_network
+
