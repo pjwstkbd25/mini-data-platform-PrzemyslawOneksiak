@@ -2,7 +2,7 @@ services:
 
   postgres:
     image: postgres:14
-    container_name: postgres_big_data
+    container_name: pgbd
     networks:
       - big_data_network
     environment:
@@ -10,11 +10,12 @@ services:
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       POSTGRES_DB: bigdata
       POSTGRES_INITDB_ARGS: "--data-checksums"
+    command: ["postgres", "-c", "config_file=/etc/postgresql.conf"]
     ports:
       - "5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./postgres-conf/postgresql.conf:/var/lib/postgresql/data/postgresql.conf
+      - ./postgres-conf/postgresql.conf:/etc/postgresql.conf
 #      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
     secrets:
       - postgres_password
@@ -37,12 +38,14 @@ services:
       ZOOKEEPER_TICK_TIME: 2000
     ports:
       - "2181:2181"
-    healthcheck:
-      test: [ "CMD-SHELL", "echo stat | nc localhost 2181 | grep Mode" ]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
+    volumes:
+      - ./zookeeper_config/zookeeper.properties:/etc/kafka/zookeeper.properties
+#    healthcheck:
+#      test: ["CMD-SHELL", "echo ruok | nc -w 2 localhost 2181 | grep imok >/dev/null"]
+#      interval: 10s
+#      timeout: 5s
+#      retries: 5
+#      start_period: 30s
     profiles:
       - kafka
 
@@ -102,6 +105,11 @@ services:
     image: confluentinc/cp-kafka-connect:7.6.0
     ports:
       - "8083:8083"
+    depends_on:
+      kafka:
+        condition: service_healthy
+      schema-registry:
+        condition: service_healthy
     networks:
       - big_data_network
     environment:
@@ -154,6 +162,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      connect:
+        condition: service_healthy
     environment:
       CSV_DIR: /app/data
       PASSWORD: /run/secrets/postgres_password
@@ -165,12 +175,12 @@ services:
     volumes:
       - ./src/data:/app/data
       - ./src:/app
-    healthcheck:
-      test: [ "CMD-SHELL", "python - << 'EOF'\nimport psycopg2, os; \nconn = psycopg2.connect(host=os.getenv('POSTGRES_HOST'), port=os.getenv('POSTGRES_PORT'), user='postgres', password=open(os.getenv('PASSWORD')).read().strip(), dbname='bigdata');\nconn.close();\nEOF" ]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
+#    healthcheck:
+#      test: [ "CMD-SHELL", "python - << 'EOF'\nimport psycopg2, os; \nconn = psycopg2.connect(host=os.getenv('POSTGRES_HOST'), port=os.getenv('POSTGRES_PORT'), user='postgres', password=open(os.getenv('PASSWORD')).read().strip(), dbname='bigdata');\nconn.close();\nEOF" ]
+#      interval: 15s
+#      timeout: 5s
+#      retries: 5
+#      start_period: 30s
     profiles:
       - postgres
 
@@ -182,44 +192,48 @@ services:
     networks:
       - big_data_network
     depends_on:
-      kafka:
-        condition: service_healthy
       connect:
         condition: service_healthy
-    entrypoint:
-      "tail -f /dev/null"
     environment:
       BOOTSTRAP_SERVERS: kafka:9092
       GROUP_ID: debezium-consumer-group
+      PYTHONUNBUFFERED: 1
 #      TOPIC: bigdata.public.table1
-    healthcheck:
-      test: [ "CMD-SHELL", "python - << 'EOF'\nfrom confluent_kafka import Consumer; import os; c = Consumer({'bootstrap.servers': os.getenv('BOOTSTRAP_SERVERS'), 'group.id': os.getenv('GROUP_ID'), 'auto.offset.reset': 'earliest'}); c.subscribe([os.getenv('TOPIC')]); c.close();\nEOF" ]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
+#    healthcheck:
+#      test: [ "CMD-SHELL", "python - << 'EOF'\nfrom confluent_kafka import Consumer; import os; c = Consumer({'bootstrap.servers': os.getenv('BOOTSTRAP_SERVERS'), 'group.id': os.getenv('GROUP_ID'), 'auto.offset.reset': 'earliest'}); c.subscribe([os.getenv('TOPIC')]); c.close();\nEOF" ]
+#      interval: 15s
+#      timeout: 5s
+#      retries: 5
+#      start_period: 30s
     profiles:
       - kafka
 
   spark:
     image: bitnami/spark:3.3.2
     build:
-      context: ./spark-jobs
+      context: ./src/spark-jobs
       dockerfile: Dockerfile
     container_name: spark_big_data
     networks:
       - big_data_network
     depends_on:
-      - kafka
-      - schema-registry
+      kafka:
+        condition: service_healthy
+      schema-registry:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
     environment:
       SPARK_MODE: "master"
       SPARK_MASTER_HOST: spark
+      AWS_PROFILE: default
       AWS_ACCESS_KEY_ID: minioadmin
       AWS_SECRET_ACCESS_KEY: minioadmin
+      AWS_DEFAULT_REGION: eu-central-1
       S3_ENDPOINT: http://minio:9000
     volumes:
-      - ./spark-jobs:/opt/spark-apps
+      - ./src/spark-jobs:/opt/spark-apps
+      - ./aws_credentials:/root/.aws
     command: >
       /opt/bitnami/scripts/spark/entrypoint.sh spark-submit
       --packages "org.apache.spark:spark-sql-kafka-0-10_2.12:3.3.2,io.delta:delta-core_2.12:2.1.0,org.apache.spark:spark-avro_2.12:3.3.2,org.apache.hadoop:hadoop-aws:3.3.4"
@@ -243,17 +257,26 @@ services:
     container_name: minio_big_data
     networks:
       - big_data_network
-    command: server /data
     environment:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
     ports:
       - "9000:9000"
       - "9001:9001"
+      - "9090:9090"
     volumes:
       - miniodata:/data
+    entrypoint: [ "sh", "-c", "\
+      /usr/bin/minio server /data --console-address ':9090' && \
+      until curl -s http://localhost:9000/health/ready; do sleep 1; done; \
+      mc alias set local http://localhost:9000 minioadmin minioadmin; \
+      mc mb --ignore-existing local/delta; \
+      wait" ]
     healthcheck:
-      test: [ "CMD-SHELL", "mc alias set _local_ http://localhost:9000 minioadmin minioadmin && mc ls _local_/ || exit 1" ]
+      test: [ "CMD-SHELL", "\
+        mc alias set local http://localhost:9000 minioadmin minioadmin >/dev/null 2>&1 && \
+        mc ls local/delta >/dev/null 2>&1 \
+        || exit 1" ]
       interval: 15s
       timeout: 5s
       retries: 5

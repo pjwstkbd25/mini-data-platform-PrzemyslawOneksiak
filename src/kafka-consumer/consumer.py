@@ -1,6 +1,6 @@
 from confluent_kafka.avro import AvroConsumer
 from confluent_kafka.avro.serializer import SerializerError
-
+print("Starting")
 conf = {
     'bootstrap.servers': 'kafka:9092',
     'group.id': 'my-group',
@@ -16,9 +16,11 @@ try:
         try:
             msg = consumer.poll(1.0)
             if msg is None:
+                print("No message")
                 continue
             print(f"Key: {msg.key()}, Value: {msg.value()}")
         except SerializerError as e:
             print("Message deserialization failed:", e)
 finally:
+    print("Stopping")
     consumer.close()
