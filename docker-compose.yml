@@ -2,7 +2,7 @@ services:
 
   postgres:
     image: postgres:14
-    container_name: postgres
+    container_name: postgres_bg
     networks:
       - big_data_network
     environment:
@@ -31,7 +31,7 @@ services:
     image: confluentinc/cp-zookeeper:7.6.0
     networks:
       - big_data_network
-    container_name: zookeeper
+    container_name: zookeeper_bg
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
@@ -44,7 +44,7 @@ services:
 
   kafka:
     image: confluentinc/cp-kafka:7.6.0
-    container_name: kafka
+    container_name: kafka_bg
     networks:
       - big_data_network
     depends_on:
@@ -76,7 +76,7 @@ services:
     image: confluentinc/cp-schema-registry:7.6.0
     networks:
       - big_data_network
-    container_name: schema_registry
+    container_name: schema_registry_bg
     depends_on:
       kafka:
         condition: service_healthy
@@ -96,7 +96,7 @@ services:
 
   connect:
     image: confluentinc/cp-kafka-connect:7.6.0
-    container_name: kafka-connect
+    container_name: kafka-connect_bg
     ports:
       - "8083:8083"
     depends_on:
@@ -147,7 +147,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: simulator
+    container_name: simulator_bg
     networks:
       - big_data_network
     depends_on:
@@ -173,7 +173,7 @@ services:
     build:
       context: ./src/kafka-consumer
       dockerfile: Dockerfile
-    container_name: kafka-cons
+    container_name: kafka-cons_bg
     networks:
       - big_data_network
     depends_on:
@@ -232,7 +232,7 @@ services:
 
   minio:
     image: minio/minio:latest
-    container_name: minio
+    container_name: minio_bg
     networks:
       - big_data_network
     environment:
