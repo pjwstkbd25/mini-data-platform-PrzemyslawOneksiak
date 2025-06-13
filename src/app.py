@@ -9,7 +9,6 @@ def main():
     sql = SQL(
         user="postgres",
         password = load_secret_password("/run/secrets/postgres_password"),
-        # password=args.password,
         host="postgres",
         db_name="bigdata",
         port="5432"
