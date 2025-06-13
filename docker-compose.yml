@@ -267,7 +267,7 @@ services:
     volumes:
       - miniodata:/data
     entrypoint: [ "sh", "-c", "\
-      /usr/bin/minio server /data --console-address ':9090' && \
+      /usr/bin/minio server /data --console-address ':9090' & \
       until curl -s http://localhost:9000/health/ready; do sleep 1; done; \
       mc alias set local http://localhost:9000 minioadmin minioadmin; \
       mc mb --ignore-existing local/delta; \
